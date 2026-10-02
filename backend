@@ -1,0 +1,3 @@
+Backend
+Spring Boot REST API for the Queue Management Platform.
+Stack: Java 25, Spring Boot, Maven, PostgreSQL.
