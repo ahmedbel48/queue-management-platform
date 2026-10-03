@@ -1,0 +1,91 @@
+@startuml
+title Queue Management Platform — Queue Entry Sequence
+
+actor Customer
+participant "Application Service" as App
+participant "ServiceProviderService" as SPS
+participant "Queue" as Queue
+participant "Ticket" as Ticket
+participant "Availability" as Availability
+
+== Walk-in ==
+
+Customer -> App : Request walk-in\n(provider, service)
+
+App -> SPS : Verify service is offered
+
+alt Service not offered
+    SPS --> App : Reject
+    App --> Customer : Entry rejected
+else Service offered
+    SPS --> App : Valid
+
+    App -> Queue : Begin queue entry transaction
+
+    App -> Ticket : Create Ticket
+    App -> Ticket : entryType = WALK_IN
+    App -> Ticket : status = WAITING
+    App -> Ticket : isPriority = false
+    App -> Ticket : reinsertionCount = 0
+    App -> Ticket : notificationAttempts = 0
+
+    App -> Queue : Assign position
+
+    Queue -> Queue : Append to Normal group
+
+    Queue --> App : Position assigned
+
+    App -> Queue : Commit transaction
+
+    App --> Customer : Ticket created
+end
+
+== Appointment ==
+
+Customer -> App : Request appointment\n(provider, service, date/time)
+
+App -> SPS : Verify service is offered
+SPS --> App : Valid
+
+App -> Availability : Check effective availability
+Availability --> App : Available / unavailable
+
+alt Not available
+    App --> Customer : Appointment rejected
+else Available
+
+    App -> Availability : Begin capacity-protected booking operation
+    App -> Availability : Calculate remaining capacity
+    Availability --> App : Capacity result
+
+    alt Capacity insufficient
+        App --> Customer : Appointment rejected
+    else Capacity sufficient
+
+        App -> Ticket : Create Ticket
+        App -> Ticket : entryType = APPOINTMENT
+        App -> Ticket : status = SCHEDULED
+        App -> Ticket : scheduledAt = requested date/time
+        App -> Ticket : isPriority = false
+        App -> Ticket : position = null
+        App -> Ticket : reinsertionCount = 0
+        App -> Ticket : notificationAttempts = 0
+
+        note right of Ticket
+            No operational queue position
+            is assigned while SCHEDULED.
+
+            Appointment type does not imply
+            priority.
+
+            isPriority may be changed later
+            by an authorized actor.
+        end note
+
+        App -> Availability : Commit booking transaction
+
+        App --> Customer : Appointment created
+    end
+end
+
+@enduml

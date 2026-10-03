@@ -1,0 +1,196 @@
+@startuml
+title Queue Management Platform — Domain Class Diagram
+
+skinparam classAttributeIconSize 0
+
+' =========================================================
+' IDENTITY & AUTHORIZATION
+' =========================================================
+
+class User {
+    id : Long
+    phone
+    email
+    passwordHash
+}
+
+class Customer {
+    id : Long
+    firstName
+    lastName
+}
+
+class Organization {
+    id : Long
+    name
+}
+
+class Membership {
+    id : Long
+}
+
+class Role {
+    id : Long
+    name
+}
+
+class Permission {
+    id : Long
+    name
+}
+
+' =========================================================
+' OPERATIONAL ACTOR
+' =========================================================
+
+class ServiceProvider {
+    id : Long
+}
+
+class Service {
+    id : Long
+    name
+    description
+}
+
+class ServiceProviderService {
+    id : Long
+    defaultDurationMinutes
+}
+
+' =========================================================
+' AVAILABILITY
+' =========================================================
+
+class WeeklyAvailability {
+    id : Long
+    dayOfWeek
+    startTime
+    endTime
+}
+
+class UnavailabilityPeriod {
+    id : Long
+    startDateTime
+    endDateTime
+    reason
+}
+
+' =========================================================
+' QUEUE MANAGEMENT
+' =========================================================
+
+class Queue {
+    id : Long
+}
+
+class Ticket {
+    id : Long
+    entryType
+    status
+    isPriority
+    position
+    reinsertionCount
+    notificationAttempts
+    createdAt
+    scheduledAt
+    notifiedAt
+    confirmedAt
+    inServiceAt
+    completedAt
+}
+
+' =========================================================
+' DOMAIN CONFIGURATION
+' =========================================================
+
+class Domaine {
+    id : Long
+    name
+}
+
+class OrganisationDomaine {
+    id : Long
+}
+
+' =========================================================
+' IDENTITY & AUTHORIZATION RELATIONS
+' =========================================================
+
+User "1" -- "0..1" Customer
+
+User "1" -- "0..*" Membership
+Membership "*" -- "1" Organization
+
+Membership "*" -- "1..*" Role
+Role "*" -- "0..*" Permission
+
+' =========================================================
+' OPERATIONAL RELATIONS
+' =========================================================
+
+Membership "1" -- "0..1" ServiceProvider
+Organization "1" -- "0..*" ServiceProvider
+
+ServiceProvider "1" -- "1" Queue
+
+ServiceProvider "1" -- "0..*" ServiceProviderService
+Service "1" -- "0..*" ServiceProviderService
+
+' =========================================================
+' AVAILABILITY
+' =========================================================
+
+ServiceProvider "1" -- "0..*" WeeklyAvailability
+ServiceProvider "1" -- "0..*" UnavailabilityPeriod
+
+' =========================================================
+' TICKETS
+' =========================================================
+
+Queue "1" -- "0..*" Ticket
+Customer "1" -- "0..*" Ticket
+Service "1" -- "0..*" Ticket
+
+' =========================================================
+' DOMAIN CONFIGURATION
+' =========================================================
+
+Organization "1" -- "0..*" OrganisationDomaine
+Domaine "1" -- "0..*" OrganisationDomaine
+
+' =========================================================
+' IMPORTANT DOMAIN INVARIANTS
+' =========================================================
+
+note right of ServiceProvider
+    Invariant:
+    ServiceProvider.organization
+    == ServiceProvider.membership.organization
+
+    A ServiceProvider is an operational
+    role attached to a Membership.
+end note
+
+note right of Ticket
+    Ticket.id:
+    Long, persistence identifier.
+
+    Queue owns ordering invariants.
+    Ticket owns lifecycle state.
+
+    position is relative to the
+    priority group, not global Queue position.
+end note
+
+note bottom of ServiceProviderService
+    defaultDurationMinutes belongs to
+    the ServiceProvider + Service pair.
+end note
+
+note bottom of Queue
+    One permanent Queue per ServiceProvider.
+    Queue is not recreated per day.
+end note
+
+@enduml

@@ -1,0 +1,82 @@
+@startuml
+title Queue Management Platform — ETA Sequence
+
+actor Customer
+
+participant "ETA Service" as ETA
+participant "Queue" as Queue
+participant "Ticket" as Ticket
+participant "ServiceProviderService" as SPS
+
+Customer -> ETA : Request ETA(ticket)
+
+ETA -> Queue : Get operational position of target
+Queue --> ETA : Tickets ahead + current service
+
+note right of Queue
+Operational order is determined by:
+1. Priority group
+2. Queue position
+
+Only tickets ahead of the target contribute to the ETA.
+end note
+
+alt IN_SERVICE ticket exists
+
+    Queue --> ETA : Current IN_SERVICE ticket
+
+    ETA -> SPS : Get duration estimate\n(provider + service)
+    SPS --> ETA : Estimated duration
+
+    ETA -> Ticket : Get inServiceAt
+    Ticket --> ETA : inServiceAt
+
+    ETA -> ETA : Calculate elapsed duration
+    ETA -> ETA : Remaining = max(estimated - elapsed, 0)
+
+else No IN_SERVICE ticket
+
+    ETA -> ETA : Current service remaining = 0
+
+end
+
+loop For each ticket ahead of target
+
+    ETA -> Ticket : Get service
+    Ticket --> ETA : Service
+
+    ETA -> SPS : Get duration estimate\n(provider + service)
+    SPS --> ETA : Estimated duration
+
+    ETA -> ETA : Add estimated duration
+
+end
+
+ETA -> ETA : ETA = current remaining\n+ durations of tickets ahead
+
+ETA --> Customer : Return derived ETA
+
+note right of ETA
+ETA is derived dynamically.
+It is NOT persisted on Ticket.
+
+Duration estimation:
+< 3 completed valid services: use defaultDurationMinutes.
+>= 3 completed valid services: use mean(actual durations).
+
+Actual duration = completedAt - inServiceAt.
+
+Historical durations are scoped to:
+ServiceProvider + Service.
+
+ETA does not modify:
+position
+priority
+order
+status
+notifications.
+
+ETA calculation does not require queue mutation.
+end note
+
+@enduml

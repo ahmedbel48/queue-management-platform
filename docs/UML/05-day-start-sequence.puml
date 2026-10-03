@@ -1,0 +1,75 @@
+@startuml
+title Queue Management Platform — Day Start Sequence
+
+participant "Day Start Scheduler" as Scheduler
+participant "Application Service" as App
+participant "ServiceProvider" as Provider
+participant "Ticket Repository" as Tickets
+participant "Queue" as Queue
+participant "Ticket" as Ticket
+
+Scheduler -> App : Activate appointments for today
+
+App -> Provider : Check physical presence
+
+alt Provider absent
+
+    Provider --> App : Absent
+    App --> Scheduler : Activation skipped
+
+else Provider present
+
+    Provider --> App : Present
+
+    App -> Tickets : Find SCHEDULED tickets for today
+    Tickets --> App : Scheduled tickets
+
+    App -> Queue : Begin queue-protected activation
+
+    App -> Queue : Get existing WAITING tickets
+    Queue --> App : Existing queue order
+
+    note right of Queue
+    Existing WAITING tickets preserve their exact current positions within their priority groups.
+    end note
+
+    App -> App : Sort SCHEDULED tickets\nby createdAt ASC, then Ticket.id ASC
+
+    loop For each SCHEDULED ticket
+
+        App -> Ticket : SCHEDULED → WAITING
+
+        alt isPriority = true
+
+            App -> Queue : Insert after existing Priority group
+
+        else isPriority = false
+
+            App -> Queue : Insert after existing Normal group
+
+        end
+
+        Queue -> Queue : Assign operational position
+        Queue --> App : Position assigned
+
+    end
+
+    App -> Queue : Commit activation transaction
+
+    note right of App
+    Appointment type does not imply priority.
+    isPriority determines the target group.
+
+    Within each priority group, newly activated appointments preserve createdAt ASC, then Ticket.id ASC.
+
+    Existing WAITING tickets are never displaced.
+
+    Morning activation does not start service.
+    First service requires an explicit provider action.
+    end note
+
+    App --> Scheduler : Activation completed
+
+end
+
+@enduml

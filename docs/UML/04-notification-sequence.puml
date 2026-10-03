@@ -1,0 +1,88 @@
+@startuml
+title Queue Management Platform — Notification Sequence
+
+actor Customer
+participant "Application Service" as App
+participant "Ticket" as Ticket
+participant "Queue" as Queue
+participant "NotificationPort" as Notification
+
+== Notification attempt ==
+
+App -> Ticket : Verify WAITING candidate
+App -> Ticket : Increment notificationAttempts
+App -> Ticket : WAITING → NOTIFIED
+
+note right of Ticket
+    notificationAttempts is the number
+    of notification send attempts triggered
+    during the operational day.
+
+    Maximum: 2.
+end note
+
+App -> App : Commit database transaction
+
+App -> Notification : Send SMS
+Notification -> Customer : SMS notification
+
+alt Customer responds
+
+    alt Customer confirms
+
+        Customer -> App : Confirm
+
+        App -> Ticket : NOTIFIED → CONFIRMED
+        App -> Ticket : Set confirmedAt
+
+    else Customer reports delay
+
+        Customer -> App : Report delay
+
+        App -> Ticket : NOTIFIED → DELAYED
+
+        App -> Queue : Reinsert ticket
+        Queue -> Ticket : Assign new position
+
+        App -> Ticket : DELAYED → WAITING
+
+        note right of Ticket
+            If notificationAttempts = 2,
+            the counter remains 2.
+
+            No third notification is allowed.
+        end note
+
+    end
+
+else No response before timeout
+
+    App -> Ticket : NOTIFIED → SKIPPED
+
+    alt notificationAttempts < 2
+
+        App -> Queue : Reinsert ticket
+        Queue -> Ticket : Assign new position
+
+        App -> Ticket : SKIPPED → WAITING
+
+        note right of Ticket
+            A later selection may trigger
+            the second notification attempt.
+        end note
+
+    else notificationAttempts = 2
+
+        note right of Ticket
+            No further notification is allowed.
+
+            Ticket remains SKIPPED and can no
+            longer receive another notification
+            during the operational day.
+        end note
+
+    end
+
+end
+
+@enduml

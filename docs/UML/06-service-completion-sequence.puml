@@ -1,0 +1,72 @@
+@startuml
+title Queue Management Platform — Service Completion Sequence
+
+actor "Service Provider" as Provider
+
+participant "Application Service" as App
+participant "Current Ticket" as Current
+participant "Queue" as Queue
+participant "Next Ticket" as Next
+
+Provider -> App : FinishAndStartNext
+
+App -> Current : Verify status = IN_SERVICE
+App -> Current : Set completedAt
+App -> Current : IN_SERVICE → COMPLETED
+
+note right of App
+Completion and next-ticket selection form one coherent business operation.
+
+Queue ordering must remain protected during the operation.
+end note
+
+App -> Queue : Select next eligible candidate
+
+Queue -> Queue : Consider WAITING / CONFIRMED
+Queue -> Queue : Priority group first
+Queue -> Queue : Position ASC
+
+Queue --> App : Next candidate
+
+alt Candidate exists
+
+    App -> Next : Verify physical presence
+
+    alt Customer present
+
+        App -> Next : WAITING/CONFIRMED → IN_SERVICE
+        App -> Next : Set inServiceAt
+
+        App --> Provider : Next service started
+
+    else Customer absent
+
+        App -> Next : WAITING/CONFIRMED → SKIPPED
+
+        alt Reinsertion allowed
+
+            App -> Queue : Reinsert ticket
+            Queue -> Next : Assign new group position
+            Queue --> App : Ticket reinserted
+
+            App -> Next : SKIPPED → WAITING
+
+        else Reinsertion not allowed
+
+            note right of Next
+            Ticket remains SKIPPED.
+
+            No further notification is triggered when notificationAttempts = 2.
+            end note
+
+        end
+
+    end
+
+else No candidate
+
+    App --> Provider : Queue has no eligible candidate
+
+end
+
+@enduml
