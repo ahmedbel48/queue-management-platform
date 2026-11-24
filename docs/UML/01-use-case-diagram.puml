@@ -1,0 +1,356 @@
+' ============================================================
+' Barber Queue Management System - 01 Use Case Diagrams (v2)
+' 5 views. Numbering is global: UC01..UC99 (no duplicates).
+' Reading rules:
+'   * Queue Operator = Barber (own queue) | Queue Manager (assigned queues)
+'                      | Secondary Owner (all queues). Primary Owner inherits.
+'   * STAFF has no queue rights by itself: only through a QUEUE_MANAGER assignment.
+'   * Every staff action that changes data is written to AUDIT_LOG (see 04-business-rules).
+'   * Permissions are checked in the Backend, per salon (never from a global JWT role).
+' ============================================================
+
+@startuml UC1_Account_Auth_Discovery
+title UC1 - Account, Authentication and Discovery
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+actor "User\n(any account)" as U
+
+rectangle "Account, Authentication and Discovery" {
+  usecase "UC01 - Register account" as UC01
+  usecase "UC02 - Verify contact\n(email or SMS code)" as UC02
+  usecase "UC03 - Set password" as UC03
+  usecase "UC04 - Log in" as UC04
+  usecase "UC05 - Refresh session" as UC05
+  usecase "UC06 - Log out / revoke session" as UC06
+  usecase "UC07 - Manage profile" as UC07
+  usecase "UC08 - Register push device" as UC08
+  usecase "UC09 - Browse salons" as UC09
+  usecase "UC10 - View salon details\n(barbers, services, hours)" as UC10
+  usecase "UC11 - View my service history" as UC11
+  usecase "UC12 - View my notifications" as UC12
+}
+
+U --> UC01
+U --> UC02
+U --> UC03
+U --> UC04
+U --> UC05
+U --> UC06
+U --> UC07
+U --> UC08
+U --> UC09
+U --> UC10
+U --> UC11
+U --> UC12
+
+UC03 .> UC02 : <<include>>
+
+note bottom of UC03
+A PENDING_VERIFICATION account (created by a
+barber) becomes ACTIVE through UC02 + UC03.
+No new account is created.
+end note
+@enduml
+
+
+@startuml UC2_Queue_Management
+title UC2 - Queue Management
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+actor Client
+actor "Queue Operator" as QO
+actor Barber
+actor "Queue Manager\n(delegated)" as QM
+actor "Secondary Owner" as SO
+actor "Primary Owner" as PO
+actor "Scheduler\n(System)" as SYS
+
+Barber --|> QO
+QM --|> QO
+SO --|> QO
+PO --|> SO
+
+rectangle "Queue Management" {
+  usecase "UC20 - Join queue" as UC20
+  usecase "UC21 - Choose barber and services" as UC21
+  usecase "UC22 - Check one active booking per day" as UC22
+  usecase "UC23 - Check appointment conflict" as UC23
+  usecase "UC24 - Compute ETA" as UC24
+  usecase "UC29 - View position and ETA" as UC29
+  usecase "UC30 - Cancel own entry" as UC30
+
+  usecase "UC25 - Add client to queue" as UC25
+  usecase "UC26 - Search client\n(masked result, 30/hour)" as UC26
+  usecase "UC27 - Create PENDING_VERIFICATION account" as UC27
+  usecase "UC31 - View queue" as UC31
+  usecase "UC32 - Call next client" as UC32
+  usecase "UC33 - Skip client" as UC33
+  usecase "UC34 - Recall SKIPPED client" as UC34
+  usecase "UC35 - Extend presence delay" as UC35
+  usecase "UC36 - Start service" as UC36
+  usecase "UC37 - Complete service" as UC37
+  usecase "UC38 - Mark no-show" as UC38
+  usecase "UC39 - Cancel entry (reason required)" as UC39
+  usecase "UC41 - Reorder queue" as UC41
+
+  usecase "UC40 - Send push notification" as UC40
+  usecase "UC42 - Notify upcoming turn\n(ETA <= reminder_minutes)" as UC42
+  usecase "UC43 - Auto-skip when presence delay expires" as UC43
+  usecase "UC44 - Recompute order and ETA" as UC44
+}
+
+Client --> UC20
+Client --> UC29
+Client --> UC30
+
+QO --> UC25
+QO --> UC31
+QO --> UC32
+QO --> UC33
+QO --> UC34
+QO --> UC35
+QO --> UC36
+QO --> UC37
+QO --> UC38
+QO --> UC39
+QO --> UC41
+
+SYS --> UC42
+SYS --> UC43
+
+UC20 .> UC21 : <<include>>
+UC20 .> UC22 : <<include>>
+UC20 .> UC23 : <<include>>
+UC20 .> UC24 : <<include>>
+UC25 .> UC26 : <<include>>
+UC25 .> UC21 : <<include>>
+UC25 .> UC22 : <<include>>
+UC25 .> UC23 : <<include>>
+UC25 .> UC24 : <<include>>
+UC27 .> UC25 : <<extend>>
+
+UC32 .> UC40 : <<include>>
+UC42 .> UC40 : <<include>>
+UC43 .> UC40 : <<include>>
+UC39 .> UC40 : <<include>>
+
+UC30 .> UC44 : <<include>>
+UC39 .> UC44 : <<include>>
+UC37 .> UC44 : <<include>>
+UC43 .> UC44 : <<include>>
+
+note bottom of UC34
+R1: only one CALLED or IN_SERVICE client
+per barber. Otherwise HTTP 409.
+end note
+
+note bottom of UC38
+MVP: NO_SHOW is final.
+IN_SERVICE cannot be cancelled by staff
+(it ends with COMPLETED).
+end note
+@enduml
+
+
+@startuml UC3_Appointments
+title UC3 - Appointment Management
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+actor Client
+actor Barber
+actor "Secondary Owner" as SO
+actor "Primary Owner" as PO
+PO --|> SO
+
+rectangle "Appointment Management" {
+  usecase "UC50 - View availability" as UC50
+  usecase "UC51 - Book appointment\n(directly CONFIRMED)" as UC51
+  usecase "UC52 - Choose barber and services" as UC52
+  usecase "UC53 - Check slot availability\n(hours, holidays, closures, queue)" as UC53
+  usecase "UC22 - Check one active booking per day" as UC22
+  usecase "UC54 - View my appointments" as UC54
+  usecase "UC55 - Cancel appointment\n(before cancellation_deadline_at)" as UC55
+
+  usecase "UC56 - View agenda" as UC56
+  usecase "UC57 - Cancel appointment\n(exceptional, reason required)" as UC57
+  usecase "UC58 - Start appointment service" as UC58
+  usecase "UC59 - Complete appointment" as UC59
+  usecase "UC60 - Mark appointment no-show" as UC60
+  usecase "UC40 - Send push notification" as UC40
+}
+
+Client --> UC50
+Client --> UC51
+Client --> UC54
+Client --> UC55
+
+Barber --> UC56
+Barber --> UC57
+Barber --> UC58
+Barber --> UC59
+Barber --> UC60
+SO --> UC56
+SO --> UC57
+SO --> UC58
+SO --> UC59
+SO --> UC60
+
+UC51 .> UC50 : <<include>>
+UC51 .> UC52 : <<include>>
+UC51 .> UC53 : <<include>>
+UC51 .> UC22 : <<include>>
+UC57 .> UC40 : <<include>>
+
+note bottom of UC51
+Concurrency: Backend check + PostgreSQL
+EXCLUDE constraint (no overlap per barber).
+cancellation_deadline_at is frozen at booking (H4).
+end note
+@enduml
+
+
+@startuml UC4_Salon_Administration
+title UC4 - Salon and Staff Administration
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+actor "User\n(any account)" as U
+actor Barber
+actor "Secondary Owner" as SO
+actor "Primary Owner" as PO
+PO --|> SO
+
+rectangle "Salon and Staff Administration" {
+  usecase "UC70 - Create salon\n(creator becomes Primary Owner)" as UC70
+  usecase "UC71 - Manage salon information" as UC71
+  usecase "UC72 - Manage service catalog" as UC72
+  usecase "UC73 - Configure barber service\n(price and duration)" as UC73
+  usecase "UC74 - Add BARBER / STAFF member" as UC74
+  usecase "UC75 - Update or deactivate\nBARBER / STAFF member" as UC75
+  usecase "UC76 - Manage working periods" as UC76
+  usecase "UC77 - Manage barber holidays" as UC77
+  usecase "UC78 - Manage salon closures" as UC78
+  usecase "UC79 - Configure salon rules\n(queue and appointments)" as UC79
+  usecase "UC80 - Assign QUEUE_MANAGER" as UC80
+  usecase "UC81 - Revoke QUEUE_MANAGER" as UC81
+  usecase "UC82 - View salon activity and basic statistics" as UC82
+  usecase "UC83 - View audit log" as UC83
+}
+
+U --> UC70
+
+SO --> UC71
+SO --> UC72
+SO --> UC73
+SO --> UC74
+SO --> UC75
+SO --> UC76
+SO --> UC77
+SO --> UC78
+SO --> UC79
+SO --> UC80
+SO --> UC81
+SO --> UC82
+SO --> UC83
+
+Barber --> UC76
+Barber --> UC77
+
+note bottom of UC76
+Barber: own periods and holidays only.
+Several periods per day; breaks are the gaps.
+No period may cross midnight (MVP).
+end note
+
+note bottom of UC75
+A Secondary Owner can never act on an OWNER
+membership (see UC5).
+end note
+@enduml
+
+
+@startuml UC5_Ownership
+title UC5 - Ownership Management
+left to right direction
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam usecase {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+actor "Primary Owner" as PO
+actor "Transfer Recipient\n(active member)" as TR
+actor "Scheduler\n(System)" as SYS
+
+rectangle "Ownership Management" {
+  usecase "UC90 - Appoint Secondary Owner" as UC90
+  usecase "UC91 - Remove or demote Secondary Owner" as UC91
+  usecase "UC92 - Propose ownership transfer" as UC92
+  usecase "UC93 - Accept ownership transfer" as UC93
+  usecase "UC94 - Decline ownership transfer" as UC94
+  usecase "UC95 - Cancel ownership transfer" as UC95
+  usecase "UC96 - Close salon definitively" as UC96
+  usecase "UC97 - Expire ownership transfer" as UC97
+  usecase "UC98 - Re-authenticate (password)" as UC98
+  usecase "UC99 - Notify all owners" as UC99
+}
+
+PO --> UC90
+PO --> UC91
+PO --> UC92
+PO --> UC95
+PO --> UC96
+TR --> UC93
+TR --> UC94
+SYS --> UC97
+
+UC92 .> UC98 : <<include>>
+UC93 .> UC98 : <<include>>
+UC90 .> UC99 : <<include>>
+UC91 .> UC99 : <<include>>
+UC92 .> UC99 : <<include>>
+UC93 .> UC99 : <<include>>
+UC94 .> UC99 : <<include>>
+UC95 .> UC99 : <<include>>
+UC97 .> UC99 : <<include>>
+
+note bottom of UC93
+One atomic transaction: demote old primary,
+promote new one, write AUDIT_LOG.
+Everything is re-checked at acceptance.
+end note
+
+note bottom of UC96
+Refused while active queue entries or future
+CONFIRMED appointments exist. No physical delete.
+end note
+@enduml

@@ -1,0 +1,666 @@
+' ============================================================
+' Barber Queue Management System - 03 MLD (v2) - PostgreSQL
+' Conventions: snake_case, plural table names, UUID primary keys,
+' TIMESTAMPTZ for every instant (stored in UTC), NOT NULL explicit.
+' Legend: "*" = NOT NULL, no "*" = nullable. Stub tables are marked (extract).
+' Constraints that PostgreSQL cannot express across tables are
+' written in notes as "Backend rule".
+' Required extension: btree_gist.
+' ============================================================
+
+@startuml MLD1_Accounts_Auth
+title MLD 1/5 - Accounts and Authentication
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+entity "users" as users {
+  * user_id : UUID <<PK>>
+  --
+  * full_name : VARCHAR(120)
+  email : VARCHAR(180) <<UQ>>
+  phone : VARCHAR(20) <<UQ>>
+  password_hash : VARCHAR(255)
+  * account_status : VARCHAR(25)
+  email_verified_at : TIMESTAMPTZ
+  phone_verified_at : TIMESTAMPTZ
+  created_by_user_id : UUID <<FK>>
+  * created_at : TIMESTAMPTZ
+  * updated_at : TIMESTAMPTZ
+}
+
+entity "barber_profiles" as barber_profiles {
+  * barber_profile_id : UUID <<PK>>
+  --
+  * user_id : UUID <<FK, UQ>>
+  bio : TEXT
+  experience_years : INT
+}
+
+entity "verification_codes" as verification_codes {
+  * verification_code_id : UUID <<PK>>
+  --
+  * user_id : UUID <<FK>>
+  * channel : VARCHAR(10)
+  * contact_value : VARCHAR(180)
+  * code_hash : VARCHAR(255)
+  * expires_at : TIMESTAMPTZ
+  * attempts_count : INT
+  * max_attempts : INT
+  consumed_at : TIMESTAMPTZ
+  invalidated_at : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+}
+
+entity "refresh_tokens" as refresh_tokens {
+  * refresh_token_id : UUID <<PK>>
+  --
+  * user_id : UUID <<FK>>
+  * family_id : UUID
+  * token_hash : VARCHAR(255) <<UQ>>
+  device_label : VARCHAR(120)
+  * issued_at : TIMESTAMPTZ
+  * expires_at : TIMESTAMPTZ
+  revoked_at : TIMESTAMPTZ
+  replaced_by_token_id : UUID <<FK>>
+}
+
+entity "device_tokens" as device_tokens {
+  * device_token_id : UUID <<PK>>
+  --
+  * user_id : UUID <<FK>>
+  * expo_push_token : VARCHAR(255) <<UQ>>
+  * platform : VARCHAR(10)
+  * is_active : BOOLEAN
+  * last_seen_at : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+}
+
+users ||--o| barber_profiles
+users ||--o{ verification_codes
+users ||--o{ refresh_tokens
+users ||--o{ device_tokens
+users |o--o{ users : created_by
+
+note right of users
+CHECK account_status IN
+ ('PENDING_VERIFICATION','ACTIVE','SUSPENDED')
+CHECK (email IS NOT NULL OR phone IS NOT NULL)
+CHECK (account_status <> 'ACTIVE' OR
+  (password_hash IS NOT NULL AND
+   (email_verified_at IS NOT NULL OR phone_verified_at IS NOT NULL)))
+email stored lowercase, phone in E.164, normalized BEFORE any lookup.
+Only an ACTIVE account can log in.
+end note
+
+note bottom of verification_codes
+CHECK channel IN ('EMAIL','SMS')
+CHECK (attempts_count >= 0 AND attempts_count <= max_attempts)
+Index (contact_value, created_at) for the 3 codes/hour limit.
+A new code sets invalidated_at on older active codes
+of the same contact and channel. Code stored hashed.
+end note
+
+note bottom of refresh_tokens
+Opaque token, hashed. Rotation: each use creates a new
+token (same family_id) and sets replaced_by_token_id.
+Reuse of an already replaced token => revoke the whole family.
+Index (user_id, revoked_at).
+end note
+@enduml
+
+
+@startuml MLD2_Salons_Access
+title MLD 2/5 - Salons, Memberships, Delegation and Ownership
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+entity "users (extract)" as users {
+  * user_id : UUID <<PK>>
+}
+
+entity "salons" as salons {
+  * salon_id : UUID <<PK>>
+  --
+  * name : VARCHAR(150)
+  * address : VARCHAR(255)
+  * city : VARCHAR(100)
+  phone : VARCHAR(30)
+  description : TEXT
+  * timezone : VARCHAR(50)
+  * salon_status : VARCHAR(10)
+  * created_at : TIMESTAMPTZ
+  closed_at : TIMESTAMPTZ
+}
+
+entity "salon_rules" as salon_rules {
+  * salon_id : UUID <<PK, FK>>
+  --
+  * reminder_minutes : INT
+  * presence_delay_minutes : INT
+  * presence_extension_minutes : INT
+  * max_queue_size : INT
+  * appointment_cancellation_minutes : INT
+  * slot_step_minutes : INT
+  * min_notice_minutes : INT
+  * booking_horizon_days : INT
+  * version : BIGINT
+  * updated_at : TIMESTAMPTZ
+  updated_by_user_id : UUID <<FK>>
+}
+
+entity "salon_memberships" as salon_memberships {
+  * membership_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * user_id : UUID <<FK>>
+  * membership_role : VARCHAR(10)
+  * is_primary_owner : BOOLEAN
+  * provides_services : BOOLEAN
+  * membership_status : VARCHAR(10)
+  * joined_at : TIMESTAMPTZ
+  deactivated_at : TIMESTAMPTZ
+  --
+  UQ(salon_id, user_id)
+  UQ(membership_id, salon_id)
+}
+
+entity "queue_manager_assignments" as qma {
+  * assignment_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * manager_membership_id : UUID <<FK>>
+  * target_membership_id : UUID <<FK>>
+  * assigned_by_user_id : UUID <<FK>>
+  * assigned_at : TIMESTAMPTZ
+  revoked_at : TIMESTAMPTZ
+  revoked_by_user_id : UUID <<FK>>
+}
+
+entity "ownership_transfers" as ownership_transfers {
+  * transfer_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * from_membership_id : UUID <<FK>>
+  * to_membership_id : UUID <<FK>>
+  * status : VARCHAR(10)
+  * requested_at : TIMESTAMPTZ
+  * expires_at : TIMESTAMPTZ
+  responded_at : TIMESTAMPTZ
+}
+
+users ||--o{ salon_memberships
+salons ||--o{ salon_memberships
+salons ||--|| salon_rules
+salon_memberships ||--o{ qma : manager
+salon_memberships ||--o{ qma : target
+salons ||--o{ ownership_transfers
+salon_memberships ||--o{ ownership_transfers : from
+salon_memberships ||--o{ ownership_transfers : to
+
+note right of salon_memberships
+CHECK membership_role IN ('OWNER','BARBER','STAFF')
+CHECK membership_status IN ('ACTIVE','INACTIVE')
+CHECK (NOT is_primary_owner OR membership_role = 'OWNER')
+CHECK (NOT is_primary_owner OR membership_status = 'ACTIVE')
+CHECK (membership_role <> 'BARBER' OR provides_services)
+CHECK (membership_role <> 'STAFF' OR NOT provides_services)
+Partial UNIQUE (salon_id) WHERE is_primary_owner
+  => at most ONE primary owner. "At least one" is guaranteed by the
+  transaction (create salon, accept transfer). Never by JWT.
+Secondary Owner = role OWNER and is_primary_owner = false.
+end note
+
+note bottom of qma
+Composite FKs: (manager_membership_id, salon_id) and
+(target_membership_id, salon_id) reference
+salon_memberships(membership_id, salon_id)  => same salon guaranteed.
+CHECK manager_membership_id != target_membership_id
+Partial UNIQUE (manager_membership_id, target_membership_id)
+  WHERE revoked_at IS NULL
+Backend rule: target has provides_services = true,
+manager is an ACTIVE BARBER or STAFF (owners do not need it).
+end note
+
+note bottom of ownership_transfers
+Composite FKs on (from/to_membership_id, salon_id).
+CHECK status IN ('PENDING','ACCEPTED','DECLINED','EXPIRED','CANCELLED')
+CHECK from_membership_id != to_membership_id
+CHECK expires_at > requested_at
+CHECK (status = 'PENDING' OR responded_at IS NOT NULL)
+Partial UNIQUE (salon_id) WHERE status = 'PENDING'
+Backend rule: lock the salon row (FOR UPDATE), then re-check at
+acceptance: both ACTIVE, proposer still primary, not expired.
+end note
+
+note bottom of salon_rules
+CHECK reminder_minutes > 0, presence_delay_minutes > 0,
+ max_queue_size > 0, slot_step_minutes > 0,
+ appointment_cancellation_minutes BETWEEN 0 AND 1440
+Created WITH the salon (defaults). Changes never touch values
+already frozen in entries or appointments.
+Optimistic lock on version. salons.salon_status IN ('ACTIVE','CLOSED').
+end note
+@enduml
+
+
+@startuml MLD3_Catalog_Schedule
+title MLD 3/5 - Service Catalog and Schedule
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+entity "salons (extract)" as salons {
+  * salon_id : UUID <<PK>>
+}
+
+entity "salon_memberships (extract)" as sm {
+  * membership_id : UUID <<PK>>
+  * salon_id : UUID
+}
+
+entity "services" as services {
+  * service_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * name : VARCHAR(120)
+  description : TEXT
+  * default_duration_minutes : INT
+  * is_active : BOOLEAN
+  --
+  UQ(salon_id, name)
+  UQ(service_id, salon_id)
+}
+
+entity "barber_services" as bs {
+  * barber_service_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * membership_id : UUID <<FK>>
+  * service_id : UUID <<FK>>
+  * price : DECIMAL(10,2)
+  * duration_minutes : INT
+  * is_available : BOOLEAN
+  --
+  UQ(membership_id, service_id)
+  UQ(barber_service_id, membership_id)
+}
+
+entity "working_hours" as wh {
+  * working_hours_id : UUID <<PK>>
+  --
+  * membership_id : UUID <<FK>>
+  * day_of_week : SMALLINT
+  * start_time : TIME
+  * end_time : TIME
+}
+
+entity "holidays" as hol {
+  * holiday_id : UUID <<PK>>
+  --
+  * membership_id : UUID <<FK>>
+  * start_at : TIMESTAMPTZ
+  * end_at : TIMESTAMPTZ
+  reason : VARCHAR(255)
+}
+
+entity "salon_closures" as sc {
+  * closure_id : UUID <<PK>>
+  --
+  * salon_id : UUID <<FK>>
+  * start_at : TIMESTAMPTZ
+  * end_at : TIMESTAMPTZ
+  reason : VARCHAR(255)
+  * created_by_user_id : UUID <<FK>>
+}
+
+salons ||--o{ services
+sm ||--o{ bs
+services ||--o{ bs
+sm ||--o{ wh
+sm ||--o{ hol
+salons ||--o{ sc
+
+note bottom of bs
+Composite FKs: (membership_id, salon_id) -> salon_memberships
+and (service_id, salon_id) -> services  => service and barber
+belong to the SAME salon (D4).
+CHECK price >= 0, duration_minutes > 0
+Backend rule: membership.provides_services = true.
+end note
+
+note bottom of wh
+CHECK day_of_week BETWEEN 1 AND 7 (ISO, 1 = Monday)
+CHECK start_time < end_time   (no period across midnight)
+Overlap forbidden:
+EXCLUDE USING gist (membership_id WITH =, day_of_week WITH =,
+  tsrange(timestamp '2000-01-01' + start_time,
+          timestamp '2000-01-01' + end_time) WITH &&)
+No "is_working" column: a day without period = day off.
+Times are LOCAL to salons.timezone.
+end note
+
+note bottom of hol
+CHECK end_at > start_at
+Backend rule: refuse or cancel+notify existing
+CONFIRMED appointments on the period.
+Same CHECK on salon_closures.
+end note
+@enduml
+
+
+@startuml MLD4_Queue_Appointments
+title MLD 4/5 - Queue Entries and Appointments
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+entity "users (extract)" as users {
+  * user_id : UUID <<PK>>
+}
+
+entity "salon_memberships (extract)" as sm {
+  * membership_id : UUID <<PK>>
+  * salon_id : UUID
+}
+
+entity "barber_services (extract)" as bs {
+  * barber_service_id : UUID <<PK>>
+  * membership_id : UUID
+}
+
+entity "queue_entries" as qe {
+  * queue_entry_id : UUID <<PK>>
+  --
+  * client_id : UUID <<FK>>
+  * salon_id : UUID <<FK>>
+  * membership_id : UUID <<FK>>
+  * queue_date : DATE
+  * ticket_number : INT
+  * position_order : INT
+  * status : VARCHAR(15)
+  * total_price_snapshot : DECIMAL(10,2)
+  * total_duration_snapshot_minutes : INT
+  initial_eta_minutes : INT
+  * created_by_user_id : UUID <<FK>>
+  * joined_at : TIMESTAMPTZ
+  notified_at : TIMESTAMPTZ
+  called_at : TIMESTAMPTZ
+  presence_deadline_at : TIMESTAMPTZ
+  first_skipped_at : TIMESTAMPTZ
+  started_at : TIMESTAMPTZ
+  completed_at : TIMESTAMPTZ
+  no_show_at : TIMESTAMPTZ
+  cancelled_at : TIMESTAMPTZ
+  cancelled_by_user_id : UUID <<FK>>
+  cancellation_reason_code : VARCHAR(30)
+  cancellation_note : VARCHAR(255)
+  * version : BIGINT
+  --
+  UQ(membership_id, queue_date, ticket_number)
+  UQ(queue_entry_id, membership_id)
+}
+
+entity "queue_entry_items" as qei {
+  * item_id : UUID <<PK>>
+  --
+  * queue_entry_id : UUID <<FK>>
+  * membership_id : UUID <<FK>>
+  * barber_service_id : UUID <<FK>>
+  * service_name_snapshot : VARCHAR(120)
+  * price_snapshot : DECIMAL(10,2)
+  * duration_snapshot_minutes : INT
+  * display_order : SMALLINT
+  --
+  UQ(queue_entry_id, barber_service_id)
+}
+
+entity "appointments" as ap {
+  * appointment_id : UUID <<PK>>
+  --
+  * client_id : UUID <<FK>>
+  * salon_id : UUID <<FK>>
+  * membership_id : UUID <<FK>>
+  * appointment_date : DATE
+  * appointment_start : TIMESTAMPTZ
+  * appointment_end : TIMESTAMPTZ
+  * status : VARCHAR(15)
+  * total_price_snapshot : DECIMAL(10,2)
+  * total_duration_snapshot_minutes : INT
+  * cancellation_deadline_at : TIMESTAMPTZ
+  * created_at : TIMESTAMPTZ
+  started_at : TIMESTAMPTZ
+  completed_at : TIMESTAMPTZ
+  no_show_at : TIMESTAMPTZ
+  cancelled_at : TIMESTAMPTZ
+  cancelled_by_user_id : UUID <<FK>>
+  cancellation_reason_code : VARCHAR(30)
+  cancellation_note : VARCHAR(255)
+  * version : BIGINT
+  --
+  UQ(appointment_id, membership_id)
+}
+
+entity "appointment_items" as api {
+  * item_id : UUID <<PK>>
+  --
+  * appointment_id : UUID <<FK>>
+  * membership_id : UUID <<FK>>
+  * barber_service_id : UUID <<FK>>
+  * service_name_snapshot : VARCHAR(120)
+  * price_snapshot : DECIMAL(10,2)
+  * duration_snapshot_minutes : INT
+  * display_order : SMALLINT
+  --
+  UQ(appointment_id, barber_service_id)
+}
+
+users ||--o{ qe : client
+sm ||--o{ qe
+qe ||--|{ qei
+bs ||--o{ qei
+users ||--o{ ap : client
+sm ||--o{ ap
+ap ||--|{ api
+bs ||--o{ api
+
+note right of qe
+CHECK status IN ('WAITING','NOTIFIED','CALLED','IN_SERVICE',
+ 'COMPLETED','SKIPPED','CANCELLED','NO_SHOW')
+Partial UNIQUE (client_id) WHERE status IN
+ ('WAITING','NOTIFIED','CALLED','IN_SERVICE','SKIPPED')   -- D7
+Partial UNIQUE (membership_id) WHERE status IN
+ ('CALLED','IN_SERVICE')                                   -- R1
+Status/timestamp CHECKs, for example:
+ COMPLETED => started_at AND completed_at NOT NULL
+ CANCELLED => cancelled_at AND cancelled_by_user_id NOT NULL
+ SKIPPED   => first_skipped_at NOT NULL (written once, never overwritten)
+ NO_SHOW   => no_show_at NOT NULL
+Index (membership_id, queue_date, status, position_order)
+Index (client_id, completed_at)
+position_order has NO unique constraint: reordering runs in ONE
+transaction holding a lock on the barber's queue.
+end note
+
+note right of ap
+CHECK status IN ('CONFIRMED','CANCELLED','COMPLETED','NO_SHOW')
+CHECK appointment_end > appointment_start
+CHECK cancellation_deadline_at <= appointment_start   -- H4
+EXCLUDE USING gist (membership_id WITH =,
+  tstzrange(appointment_start, appointment_end) WITH &&)
+  WHERE (status = 'CONFIRMED')                            -- Q9
+Partial UNIQUE (client_id, appointment_date) WHERE status='CONFIRMED'
+CHECK (status <> 'COMPLETED' OR started_at IS NOT NULL
+                              AND completed_at IS NOT NULL)
+Index (membership_id, appointment_start), (client_id, completed_at)
+end note
+
+note bottom of qei
+Composite FKs (queue_entry_id, membership_id) -> queue_entries and
+(barber_service_id, membership_id) -> barber_services:
+all services of a visit belong to the SAME barber.
+Same pattern for appointment_items.
+Rows of a COMPLETED visit are immutable (Backend rule).
+No physical DELETE: ON DELETE RESTRICT everywhere (history, Q6).
+end note
+
+note bottom of sm
+BACKEND RULES (not expressible in one table):
+* One active commitment per client and local day, ALL salons,
+  queue and appointments together (Q13, H5): single service
+  ClientDayPolicy, lock on the client's users row (FOR UPDATE),
+  count active queue entries + CONFIRMED appointments of that day.
+* Queue entry vs CONFIRMED appointment overlap (D1): checked in the
+  same transaction, then re-checked before confirmation.
+* A barber/manager cannot be client of the queue they operate.
+end note
+@enduml
+
+
+@startuml MLD5_Notifications_Audit_History
+title MLD 5/5 - Notifications, Audit Log and History View
+hide circle
+skinparam linetype ortho
+skinparam shadowing false
+skinparam class {
+  BackgroundColor White
+  BorderColor #34495E
+  ArrowColor #566573
+}
+
+entity "users (extract)" as users {
+  * user_id : UUID <<PK>>
+}
+
+entity "queue_entries (extract)" as qe {
+  * queue_entry_id : UUID <<PK>>
+}
+
+entity "appointments (extract)" as ap {
+  * appointment_id : UUID <<PK>>
+}
+
+entity "ownership_transfers (extract)" as ot {
+  * transfer_id : UUID <<PK>>
+}
+
+entity "salons (extract)" as salons {
+  * salon_id : UUID <<PK>>
+}
+
+entity "notifications" as n {
+  * notification_id : UUID <<PK>>
+  --
+  * user_id : UUID <<FK>>
+  salon_id : UUID <<FK>>
+  queue_entry_id : UUID <<FK>>
+  appointment_id : UUID <<FK>>
+  transfer_id : UUID <<FK>>
+  * notification_type : VARCHAR(40)
+  * message : TEXT
+  * delivery_status : VARCHAR(20)
+  dedupe_key : VARCHAR(120) <<UQ>>
+  * created_at : TIMESTAMPTZ
+  sent_at : TIMESTAMPTZ
+  read_at : TIMESTAMPTZ
+}
+
+entity "audit_logs" as al {
+  * audit_log_id : UUID <<PK>>
+  --
+  salon_id : UUID <<FK>>
+  actor_user_id : UUID <<FK>>
+  * action_type : VARCHAR(60)
+  entity_type : VARCHAR(40)
+  entity_id : UUID
+  old_value : JSONB
+  new_value : JSONB
+  contact_hash : VARCHAR(64)
+  result_found : BOOLEAN
+  * created_at : TIMESTAMPTZ
+}
+
+entity "service_history_view  <<VIEW>>" as shv {
+  source_type : 'QUEUE' | 'APPOINTMENT'
+  source_id : UUID
+  client_id : UUID
+  membership_id : UUID
+  salon_id : UUID
+  completed_at : TIMESTAMPTZ
+  actual_duration_minutes : INT
+  total_price_snapshot : DECIMAL
+  total_duration_snapshot_minutes : INT
+}
+
+users ||--o{ n
+salons |o--o{ n
+qe |o--o{ n
+ap |o--o{ n
+ot |o--o{ n
+users |o--o{ al : actor
+salons |o--o{ al
+qe ..> shv
+ap ..> shv
+
+note right of n
+CHECK notification_type IN ('UPCOMING_TURN','YOUR_TURN',
+ 'TURN_SKIPPED','ENTRY_CANCELLED','APPOINTMENT_CANCELLED',
+ 'OWNER_ROLE_CHANGED','OWNERSHIP_TRANSFER_REQUESTED',
+ 'OWNERSHIP_TRANSFER_ACCEPTED','OWNERSHIP_TRANSFER_DECLINED',
+ 'OWNERSHIP_TRANSFER_EXPIRED','OWNERSHIP_TRANSFER_CANCELLED')
+CHECK num_nonnulls(queue_entry_id, appointment_id, transfer_id) <= 1
+CHECK delivery_status IN ('PENDING','SENT','FAILED','NO_DEVICE')
+dedupe_key (example: entryId:YOUR_TURN:cycle2) prevents duplicates
+yet allows a second YOUR_TURN after a SKIPPED recall.
+Index (user_id, created_at).
+end note
+
+note right of al
+APPEND-ONLY: no UPDATE, no DELETE (revoked at DB level).
+action_type examples: CLIENT_SEARCH, QUEUE_ENTRY_CANCELLED_BY_STAFF,
+ PRICE_CHANGED, SALON_RULES_CHANGED, MEMBER_DEACTIVATED,
+ QUEUE_MANAGER_ASSIGNED / REVOKED, OWNER_APPOINTED / DEMOTED,
+ OWNERSHIP_TRANSFERRED, SALON_CLOSED.
+CLIENT_SEARCH stores contact_hash (HMAC with a server secret),
+NEVER the phone or email. actor_user_id NULL = system.
+Written in the SAME transaction as the change it records.
+Indexes (actor_user_id, created_at), (salon_id, created_at).
+end note
+
+note bottom of shv
+CREATE VIEW service_history_view AS
+ SELECT 'QUEUE' AS source_type, queue_entry_id AS source_id,
+        client_id, membership_id, salon_id, completed_at,
+        EXTRACT(EPOCH FROM (completed_at - started_at))/60 AS actual_duration_minutes,
+        total_price_snapshot, total_duration_snapshot_minutes
+ FROM queue_entries WHERE status = 'COMPLETED'
+ UNION ALL
+ SELECT 'APPOINTMENT', appointment_id, client_id, membership_id, salon_id,
+        completed_at, (same formula), total_price_snapshot,
+        total_duration_snapshot_minutes
+ FROM appointments WHERE status = 'COMPLETED';
+The view filters nothing by role: the Backend restricts reads
+(client = own visits, salon = its own visits only).
+end note
+@enduml

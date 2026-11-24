@@ -1,0 +1,351 @@
+' ============================================================
+' Barber Queue Management System - 02 MCD (v2)
+' Conceptual level: business attributes only, NO foreign keys,
+' NO technical columns (version, created_at...). See 03-mld.puml.
+' Legend: * = mandatory attribute
+' ============================================================
+
+@startuml MCD1_Accounts_Salons_Access
+title MCD 1/3 - Accounts, Salons and Access
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam entity {
+  BackgroundColor White
+  BorderColor #34495E
+}
+hide methods
+hide stereotypes
+
+entity "USER" as USER {
+  * user_id
+  --
+  * full_name
+  email
+  phone
+  password_hash
+  * account_status
+  email_verified_at
+  phone_verified_at
+}
+
+entity "BARBER_PROFILE" as BARBER_PROFILE {
+  * barber_profile_id
+  --
+  bio
+  experience_years
+}
+
+entity "VERIFICATION_CODE" as VERIFICATION_CODE {
+  * verification_code_id
+  --
+  * channel
+  * contact_value
+  * expires_at
+  * attempts_count
+  consumed_at
+  invalidated_at
+}
+
+entity "REFRESH_TOKEN" as REFRESH_TOKEN {
+  * refresh_token_id
+  --
+  * expires_at
+  revoked_at
+  device_label
+}
+
+entity "DEVICE_TOKEN" as DEVICE_TOKEN {
+  * device_token_id
+  --
+  * expo_push_token
+  * platform
+  * is_active
+}
+
+entity "SALON" as SALON {
+  * salon_id
+  --
+  * name
+  * address
+  * city
+  * timezone
+  * salon_status
+}
+
+entity "SALON_RULES" as SALON_RULES {
+  * (one per salon)
+  --
+  * reminder_minutes
+  * presence_delay_minutes
+  * max_queue_size
+  * appointment_cancellation_minutes
+  * slot_step_minutes
+  * booking_horizon_days
+}
+
+entity "SALON_MEMBERSHIP" as SALON_MEMBERSHIP {
+  * membership_id
+  --
+  * membership_role
+  * is_primary_owner
+  * provides_services
+  * membership_status
+  * joined_at
+}
+
+entity "QUEUE_MANAGER_ASSIGNMENT" as QMA {
+  * assignment_id
+  --
+  * assigned_at
+  revoked_at
+}
+
+entity "OWNERSHIP_TRANSFER" as OT {
+  * transfer_id
+  --
+  * status
+  * requested_at
+  * expires_at
+  responded_at
+}
+
+USER ||--o| BARBER_PROFILE : has
+USER ||--o{ VERIFICATION_CODE : receives
+USER ||--o{ REFRESH_TOKEN : owns
+USER ||--o{ DEVICE_TOKEN : registers
+USER ||--o{ SALON_MEMBERSHIP : holds
+SALON ||--o{ SALON_MEMBERSHIP : has
+SALON ||--|| SALON_RULES : is configured by
+SALON_MEMBERSHIP ||--o{ QMA : "is manager in"
+SALON_MEMBERSHIP ||--o{ QMA : "is managed queue of"
+SALON ||--o{ OT : concerns
+SALON_MEMBERSHIP ||--o{ OT : proposes
+SALON_MEMBERSHIP ||--o{ OT : receives
+@enduml
+
+
+@startuml MCD2_Catalog_Schedule
+title MCD 2/3 - Service Catalog and Schedule
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam entity {
+  BackgroundColor White
+  BorderColor #34495E
+}
+hide methods
+hide stereotypes
+
+entity "SALON" as SALON {
+  * salon_id
+}
+
+entity "SALON_MEMBERSHIP" as SALON_MEMBERSHIP {
+  * membership_id
+}
+
+entity "SERVICE" as SERVICE {
+  * service_id
+  --
+  * name
+  description
+  * default_duration_minutes
+  * is_active
+}
+
+entity "BARBER_SERVICE" as BARBER_SERVICE {
+  * barber_service_id
+  --
+  * price
+  * duration_minutes
+  * is_available
+}
+
+entity "WORKING_HOURS" as WORKING_HOURS {
+  * working_hours_id
+  --
+  * day_of_week
+  * start_time
+  * end_time
+}
+
+entity "HOLIDAY" as HOLIDAY {
+  * holiday_id
+  --
+  * start_at
+  * end_at
+  reason
+}
+
+entity "SALON_CLOSURE" as SALON_CLOSURE {
+  * closure_id
+  --
+  * start_at
+  * end_at
+  reason
+}
+
+SALON ||--o{ SERVICE : "offers (own catalog)"
+SALON_MEMBERSHIP ||--o{ BARBER_SERVICE : provides
+SERVICE ||--o{ BARBER_SERVICE : "is configured as"
+SALON_MEMBERSHIP ||--o{ WORKING_HOURS : "works during"
+SALON_MEMBERSHIP ||--o{ HOLIDAY : declares
+SALON ||--o{ SALON_CLOSURE : declares
+
+note bottom of WORKING_HOURS
+Several periods per day allowed.
+A break = the gap between two periods.
+end note
+@enduml
+
+
+@startuml MCD3_Operations
+title MCD 3/3 - Queue, Appointments, Notifications and Audit
+left to right direction
+skinparam linetype ortho
+skinparam shadowing false
+skinparam entity {
+  BackgroundColor White
+  BorderColor #34495E
+}
+hide methods
+hide stereotypes
+
+entity "USER" as USER {
+  * user_id
+}
+
+entity "SALON" as SALON {
+  * salon_id
+}
+
+entity "SALON_MEMBERSHIP" as SALON_MEMBERSHIP {
+  * membership_id
+}
+
+entity "BARBER_SERVICE" as BARBER_SERVICE {
+  * barber_service_id
+}
+
+entity "OWNERSHIP_TRANSFER" as OT {
+  * transfer_id
+}
+
+entity "QUEUE_ENTRY" as QUEUE_ENTRY {
+  * queue_entry_id
+  --
+  * queue_date
+  * ticket_number
+  * position_order
+  * status
+  * total_price_snapshot
+  * total_duration_snapshot_minutes
+  initial_eta_minutes
+  * joined_at
+  notified_at
+  called_at
+  presence_deadline_at
+  first_skipped_at
+  started_at
+  completed_at
+  no_show_at
+  cancelled_at
+  cancellation_reason_code
+}
+
+entity "QUEUE_ENTRY_ITEM" as QEI {
+  * item_id
+  --
+  * service_name_snapshot
+  * price_snapshot
+  * duration_snapshot_minutes
+  * display_order
+}
+
+entity "APPOINTMENT" as APPOINTMENT {
+  * appointment_id
+  --
+  * appointment_date
+  * appointment_start
+  * appointment_end
+  * status
+  * total_price_snapshot
+  * total_duration_snapshot_minutes
+  * cancellation_deadline_at
+  started_at
+  completed_at
+  no_show_at
+  cancelled_at
+  cancellation_reason_code
+}
+
+entity "APPOINTMENT_ITEM" as API {
+  * item_id
+  --
+  * service_name_snapshot
+  * price_snapshot
+  * duration_snapshot_minutes
+  * display_order
+}
+
+entity "NOTIFICATION" as NOTIFICATION {
+  * notification_id
+  --
+  * notification_type
+  * message
+  * delivery_status
+  dedupe_key
+  sent_at
+  read_at
+}
+
+entity "AUDIT_LOG" as AUDIT_LOG {
+  * audit_log_id
+  --
+  * action_type
+  entity_type
+  old_value
+  new_value
+  contact_hash
+  result_found
+  * created_at
+}
+
+entity "SERVICE_HISTORY_VIEW" as SHV <<view>> {
+  source_type
+  source_id
+  completed_at
+  actual_duration_minutes
+  total_price_snapshot
+}
+
+USER ||--o{ QUEUE_ENTRY : "joins (client)"
+SALON_MEMBERSHIP ||--o{ QUEUE_ENTRY : "serves (barber queue)"
+QUEUE_ENTRY ||--|{ QEI : contains
+BARBER_SERVICE ||--o{ QEI : "is chosen in"
+
+USER ||--o{ APPOINTMENT : "books (client)"
+SALON_MEMBERSHIP ||--o{ APPOINTMENT : receives
+APPOINTMENT ||--|{ API : contains
+BARBER_SERVICE ||--o{ API : "is chosen in"
+
+USER ||--o{ NOTIFICATION : receives
+QUEUE_ENTRY |o--o{ NOTIFICATION : triggers
+APPOINTMENT |o--o{ NOTIFICATION : triggers
+OT |o--o{ NOTIFICATION : triggers
+
+USER |o--o{ AUDIT_LOG : "acts in"
+SALON |o--o{ AUDIT_LOG : "is concerned by"
+
+QUEUE_ENTRY ..> SHV : "COMPLETED"
+APPOINTMENT ..> SHV : "COMPLETED"
+
+note bottom of QUEUE_ENTRY
+Order of the queue (R1, Q1):
+1. CALLED / IN_SERVICE
+2. SKIPPED by first_skipped_at (FIFO)
+3. WAITING / NOTIFIED by position_order
+ticket_number never changes.
+end note
+@enduml
